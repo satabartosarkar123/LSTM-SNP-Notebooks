@@ -181,7 +181,7 @@ def build_model(input_dim, units, batch_size):
     outputs = {out_layer}
 
     model = tf.keras.Model(inputs=inputs, outputs=[outputs, c_out, o_out])
-    model.compile(optimizer=tf.keras.optimizers.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])
+    model.compile(optimizer=tf.keras.optimizers.legacy.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])
     return model
 """
 
