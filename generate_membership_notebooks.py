@@ -206,10 +206,13 @@ X_test = {"X_test_fuzzy" if needs_fuzzy_in else "X_test_raw"}.reshape(({"X_test_
 """
     return prep_train_test + f"""
 all_rmse, all_mse, all_nmse = [], [], []
+all_predictions = []
+all_losses = []
 all_c_means, all_c_stds, all_c_mins, all_c_maxs = [], [], [], []
 all_o_means, all_o_stds, all_o_mins, all_o_maxs = [], [], [], []
 
 for run in range(30):
+    print(f'\\n===== RUN {{run+1}}/30 =====')
     np.random.seed(run)
     tf.random.set_seed(run)
     tf.keras.backend.clear_session()
@@ -217,9 +220,12 @@ for run in range(30):
     model = build_model(input_dim={2 if needs_fuzzy_in else 1}, units=8, batch_size=1)
     rnn_layer = model.layers[1]
     
+    run_losses = []
     for epoch in range(100):
-        model.fit(X_train, y_train, epochs=1, batch_size=1, verbose=0, shuffle=False)
+        history = model.fit(X_train, y_train, epochs=1, batch_size=1, verbose=0, shuffle=False)
+        run_losses.append(history.history['loss'][0])
         rnn_layer.reset_states()
+    all_losses.append(run_losses)
 
     # Warmup
     for i in range(len(X_train)): model.predict(X_train[i:i+1], batch_size=1, verbose=0)
@@ -242,13 +248,194 @@ for run in range(30):
 
     actual = raw_values[-{test_size}:]
     rmse = sqrt(mean_squared_error(actual, predictions))
+    mse = mean_squared_error(actual, predictions)
+    meanV = np.mean(actual)
+    dominator = np.linalg.norm(np.array(predictions) - meanV, 2)
+    nmse = mse / np.power(dominator, 2)
+
     all_rmse.append(rmse)
-    print(f'Run {{run+1}} — RMSE: {{rmse:.6f}} (Gate Mean C: {{np.mean(c_gates):.4f}})')
+    all_mse.append(mse)
+    all_nmse.append(nmse)
+    all_predictions.append(predictions)
+    print(f'Run {{run+1}} — RMSE: {{rmse:.6f}}, MSE: {{mse:.6f}}, NMSE: {{nmse:.10f}} (Gate Mean C: {{np.mean(c_gates):.4f}})')
 
 print('\\n===== GATE STATISTICS =====')
 print(f'C-Gate - Mean: {{np.mean(all_c_means):.4f}}, Min: {{np.min(all_c_mins):.4f}}, Max: {{np.max(all_c_maxs):.4f}}')
 print(f'O-Gate - Mean: {{np.mean(all_o_means):.4f}}, Min: {{np.min(all_o_mins):.4f}}, Max: {{np.max(all_o_maxs):.4f}}')
 print(f'\\nOverall RMSE: {{np.mean(all_rmse):.6f}}')
+"""
+
+def build_summary_stats_code(topology, mf_type, dataset_name):
+    title = f"{topology} ({mf_type.upper()}) on {dataset_name}"
+    return f"""\
+# ============================================================
+# Summary Statistics (30 runs)
+# ============================================================
+
+print('\\n===== FINAL RESULTS — {title} (30 runs) =====')
+print(f'RMSE: {{np.mean(all_rmse):.6f}} ± {{np.std(all_rmse):.6f}}')
+print(f'MSE:  {{np.mean(all_mse):.6f}} ± {{np.std(all_mse):.6f}}')
+print(f'NMSE: {{np.mean(all_nmse):.10f}} ± {{np.std(all_nmse):.10f}}')
+
+best_idx = np.argmin(all_rmse)
+print(f'\\nBest run: {{best_idx+1}}')
+print(f'  RMSE: {{all_rmse[best_idx]:.6f}}')
+print(f'  MSE:  {{all_mse[best_idx]:.6f}}')
+print(f'  NMSE: {{all_nmse[best_idx]:.10f}}')
+"""
+
+def build_graphs_code(topology, mf_type, dataset_name, test_size):
+    title = f"{topology} ({mf_type.upper()}) — {dataset_name}"
+    return f"""\
+# ============================================================
+# Predictions vs Actual (Best Run)
+# ============================================================
+
+actual = raw_values[-{test_size}:]
+best_predictions = all_predictions[best_idx]
+
+plt.figure(figsize=(12, 5))
+plt.plot(actual, label='Actual', color='blue', linewidth=1.5)
+plt.plot(best_predictions, label='Predicted (Best Run)', color='red',
+         linewidth=1.5, linestyle='--')
+plt.title('{title}\\nPredictions vs Actual (Best of 30 runs)')
+plt.xlabel('Time Step')
+plt.ylabel('Value')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Loss Curve (Best Run)
+# ============================================================
+
+plt.figure(figsize=(12, 4))
+plt.plot(all_losses[best_idx], color='green', linewidth=1.0)
+plt.title('{title}\\nTraining Loss (Best Run)')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Average Loss Curve (All 30 Runs)
+# ============================================================
+
+avg_losses = np.mean(all_losses, axis=0)
+std_losses = np.std(all_losses, axis=0)
+epochs = np.arange(1, len(avg_losses) + 1)
+
+plt.figure(figsize=(12, 4))
+plt.plot(epochs, avg_losses, color='purple', linewidth=1.5, label='Mean Loss')
+plt.fill_between(epochs, avg_losses - std_losses, avg_losses + std_losses,
+                 alpha=0.2, color='purple', label='±1 Std Dev')
+plt.title('{title}\\nAverage Training Loss (30 runs ± 1σ)')
+plt.xlabel('Epoch')
+plt.ylabel('MSE Loss')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# RMSE Distribution (Boxplot + All Points)
+# ============================================================
+
+plt.figure(figsize=(8, 5))
+plt.boxplot(all_rmse, vert=True, patch_artist=True,
+            boxprops=dict(facecolor='lightblue', color='navy'),
+            medianprops=dict(color='red', linewidth=2))
+plt.scatter(np.ones(len(all_rmse)), all_rmse, alpha=0.5, color='navy', zorder=5)
+plt.title('{title}\\nRMSE Distribution (30 runs)')
+plt.ylabel('RMSE')
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Average Predictions vs Actual
+# ============================================================
+
+avg_predictions = np.mean(all_predictions, axis=0)
+std_predictions = np.std(all_predictions, axis=0)
+
+plt.figure(figsize=(12, 5))
+plt.plot(actual, label='Actual', color='blue', linewidth=1.5)
+plt.plot(avg_predictions, label='Mean Predicted (30 runs)', color='red',
+         linewidth=1.5, linestyle='--')
+plt.fill_between(range(len(actual)),
+                 avg_predictions - std_predictions,
+                 avg_predictions + std_predictions,
+                 alpha=0.2, color='red', label='±1 Std Dev')
+plt.title('{title}\\nAverage Predictions vs Actual (30 runs ± 1σ)')
+plt.xlabel('Time Step')
+plt.ylabel('Value')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Gate Statistics Visualization
+# ============================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+# C-Gate statistics
+axes[0].errorbar(range(len(all_c_means)), all_c_means, yerr=all_c_stds,
+                 fmt='o-', color='teal', ecolor='lightcoral', capsize=3, markersize=4)
+axes[0].set_title('C-Gate Mean ± Std per Run')
+axes[0].set_xlabel('Run')
+axes[0].set_ylabel('C-Gate Value')
+axes[0].grid(True, alpha=0.3)
+
+# O-Gate statistics
+axes[1].errorbar(range(len(all_o_means)), all_o_means, yerr=all_o_stds,
+                 fmt='o-', color='darkorange', ecolor='lightcoral', capsize=3, markersize=4)
+axes[1].set_title('O-Gate Mean ± Std per Run')
+axes[1].set_xlabel('Run')
+axes[1].set_ylabel('O-Gate Value')
+axes[1].grid(True, alpha=0.3)
+
+plt.suptitle('{title} — Gate Statistics (30 runs)', fontsize=13)
+plt.tight_layout()
+plt.show()
+
+# ============================================================
+# Final Metrics Summary
+# ============================================================
+
+print('=== Best Run Metrics ===')
+print(f'RMSE: {{all_rmse[best_idx]:.6f}}')
+print(f'MSE:  {{all_mse[best_idx]:.6f}}')
+print(f'NMSE: {{all_nmse[best_idx]:.10f}}')
+
+print('\\n=== Average Metrics (30 runs) ===')
+print(f'RMSE: {{np.mean(all_rmse):.6f}} ± {{np.std(all_rmse):.6f}}')
+print(f'MSE:  {{np.mean(all_mse):.6f}} ± {{np.std(all_mse):.6f}}')
+print(f'NMSE: {{np.mean(all_nmse):.10f}} ± {{np.std(all_nmse):.10f}}')
+"""
+
+def build_observations_md(topology, mf_type, dataset_name):
+    title = f"{topology} ({mf_type.upper()}) on {dataset_name}"
+    return f"""\
+## Observations
+
+### {title}
+
+**Run the notebook to generate results and fill in observations:**
+
+1. **Prediction Quality**: Compare RMSE/MSE/NMSE with other variants
+2. **Training Stability**: Examine loss curves for convergence behavior
+3. **Average Behaviour**: Compare average predictions vs actual
+4. **Gate Dynamics**: Examine C-Gate and O-Gate statistics across runs
+5. **Prediction Tracking**: Assess how well predictions track actual values
+6. **Computational Cost**: Note training time per run
+
+*After running all variant notebooks, perform cross-variant comparison to evaluate 
+whether the membership function activation improves performance over standard activations.*
 """
 
 def generate_notebook(topology, mf_type, dataset_key):
@@ -263,6 +450,10 @@ def generate_notebook(topology, mf_type, dataset_key):
     cells.append(code_cell(data_loading_code(ds['csv_path'])))
     cells.append(code_cell(PREPROCESSING_CODE))
     cells.append(code_cell(build_experiment_code(topology, ds['test_size'])))
+    cells.append(md_cell("## Results"))
+    cells.append(code_cell(build_summary_stats_code(topology, mf_type, ds['name'])))
+    cells.append(code_cell(build_graphs_code(topology, mf_type, ds['name'], ds['test_size'])))
+    cells.append(md_cell(build_observations_md(topology, mf_type, ds['name'])))
     return make_notebook(cells)
 
 def main():
