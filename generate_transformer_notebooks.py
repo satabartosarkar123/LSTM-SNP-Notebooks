@@ -652,7 +652,7 @@ class FEDSeriesDecomposition(nn.Module):
 
 
 class FEDformerEncoderLayer(nn.Module):
-    def __init__(self, d_model, d_ff, n_modes=8, dropout=0.1):
+    def __init__(self, d_model, n_heads, d_ff, n_modes=8, dropout=0.1):
         super().__init__()
         self.fourier_block = FourierBlock(d_model, n_modes)
         self.decomp1 = FEDSeriesDecomposition(kernel_size=3)
@@ -685,13 +685,13 @@ class FEDformerModel(nn.Module):
     FEDformer for univariate time-series forecasting.
     Input: (batch, seq_len=1, 1) → Output: (batch, 1)
     \"\"\"
-    def __init__(self, input_dim=1, d_model=32, d_ff=64,
+    def __init__(self, input_dim=1, d_model=32, n_heads=4, d_ff=64,
                  n_modes=8, n_layers=2, dropout=0.1):
         super().__init__()
         self.input_proj = nn.Linear(input_dim, d_model)
         self.pos_embedding = nn.Parameter(torch.randn(1, 100, d_model) * 0.02)
         self.encoder_layers = nn.ModuleList([
-            FEDformerEncoderLayer(d_model, d_ff, n_modes, dropout)
+            FEDformerEncoderLayer(d_model, n_heads, d_ff, n_modes, dropout)
             for _ in range(n_layers)
         ])
         self.output_proj = nn.Linear(d_model, 1)
