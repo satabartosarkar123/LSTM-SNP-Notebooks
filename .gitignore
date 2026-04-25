@@ -6,3 +6,4 @@ __pycache__/
 snn_venv/
 transformer_venv/
 *_venv/
+content/archive/
