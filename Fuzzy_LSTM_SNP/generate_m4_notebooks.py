@@ -33,7 +33,7 @@ for t_dir, prefix in types.items():
                 for line in cell['source']:
                     # Replace run count strings and loop
                     line = re.sub(r'for run in range\(\d+\):', 'for run in range(30):', line)
-                    line = line.replace('(2 runs)', '(30 runs)')
+                    line = line.replace('(30 runs)', '(30 runs)')
                     line = line.replace('of 2 runs', 'of 30 runs')
                     line = line.replace('Dow Jones Industrial Index', f'M4 {freq}')
                     line = line.replace('Dow Jones', f'M4 {freq}')

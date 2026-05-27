@@ -160,7 +160,7 @@ print(f'\nOverall RMSE: {np.mean(all_rmse):.6f}')
 # Summary Statistics (30 runs)
 # ============================================================
 
-print('\n===== FINAL RESULTS — MF_Gates_Only (DOG) on Dow Jones (30 runs) =====')
+print('\n===== FINAL RESULTS (30 runs) =====')
 mean_rmse = np.mean(all_rmse)
 std_rmse = np.std(all_rmse)
 var_rmse = np.var(all_rmse)

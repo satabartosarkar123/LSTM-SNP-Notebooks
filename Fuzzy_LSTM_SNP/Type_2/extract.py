@@ -288,8 +288,8 @@ all_nmse = []
 all_predictions = []
 all_losses = []
 
-for run in range(2):
-    print(f'\n===== RUN {run+1}/2 =====')
+for run in range(30):
+    print(f'\n===== RUN {run+1}/30 =====')
 
     np.random.seed(run)
     tf.random.set_seed(run)
@@ -367,10 +367,10 @@ for run in range(2):
 
     print(f'Run {run+1} — RMSE: {rmse:.6f}, MSE: {mse:.6f}, NMSE: {nmse:.10f}')
 # ============================================================
-# Summary Statistics (2 runs)
+# Summary Statistics (30 runs)
 # ============================================================
 
-print('\n===== FINAL RESULTS — Fuzzy Feature Augmentation on Dow Jones Industrial Index (2 runs) =====')
+print('\n===== FINAL RESULTS (30 runs) =====')
 print(f'RMSE: {np.mean(all_rmse):.6f} ± {np.std(all_rmse):.6f}')
 print(f'MSE:  {np.mean(all_mse):.6f} ± {np.std(all_mse):.6f}')
 print(f'NMSE: {np.mean(all_nmse):.10f} ± {np.std(all_nmse):.10f}')
@@ -391,7 +391,7 @@ plt.figure(figsize=(12, 5))
 plt.plot(actual, label='Actual', color='blue', linewidth=1.5)
 plt.plot(best_predictions, label='Predicted (Best Run)', color='red',
          linewidth=1.5, linestyle='--')
-plt.title('Fuzzy Feature Augmentation — Dow Jones Industrial Index\nPredictions vs Actual (Best of 2 runs)')
+plt.title('Fuzzy Feature Augmentation — Dow Jones Industrial Index\nPredictions vs Actual (Best of 30 runs)')
 plt.xlabel('Time Step')
 plt.ylabel('Value')
 plt.legend()

@@ -51,7 +51,7 @@ VARIANTS = ['Gates_Only', 'Gates_Plus_FuzzyInput', 'Gates_Plus_FuzzyOutput']
 FOLDER_PREFIX = 'FLSTM_Fuzzy_MF'
 NB_PREFIX = 'FLSTM_MF'
 
-NUM_RUNS = 2
+NUM_RUNS = 30
 NUM_EPOCHS = 100
 UNITS = 8
 Q_REGIONS = 5

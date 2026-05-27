@@ -38,8 +38,8 @@ for nb_path in notebooks:
     source_code = "\n\n".join(combined_code)
 
     # Replace N_RUNS
-    source_code = source_code.replace("N_RUNS = 2", "N_RUNS = 5")
-    source_code = source_code.replace("N_RUNS = 30", "N_RUNS = 5")
+    source_code = source_code.replace("N_RUNS = 30", "N_RUNS = 30")
+    source_code = source_code.replace("N_RUNS = 30", "N_RUNS = 30")
 
     # Now let's build the new loop cell
     new_source = []

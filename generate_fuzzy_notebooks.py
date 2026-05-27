@@ -873,7 +873,7 @@ def results_code(test_size, variant_name, dataset_name):
 # Summary Statistics (30 runs)
 # ============================================================
 
-print('\\n===== FINAL RESULTS — {variant_name} on {dataset_name} (30 runs) =====')
+print('\\n===== FINAL RESULTS (30 runs) =====')
 print(f'RMSE: {{np.mean(all_rmse):.6f}} ± {{np.std(all_rmse):.6f}}')
 print(f'MSE:  {{np.mean(all_mse):.6f}} ± {{np.std(all_mse):.6f}}')
 print(f'NMSE: {{np.mean(all_nmse):.10f}} ± {{np.std(all_nmse):.10f}}')
