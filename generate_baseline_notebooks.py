@@ -170,7 +170,7 @@ def train_eval_cells():
 #   - Epochs: 200
 #   - Batch size: 1 (sample-by-sample, no shuffle)
 
-def train_model(model, X_train, y_train, epochs=200, lr=0.001, verbose=True):
+def train_model(model, X_train, y_train, epochs=100, lr=0.001, verbose=True):
     \"\"\"Train model following the LSTM-SNP protocol exactly.\"\"\"
     model.train()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -250,7 +250,7 @@ def experiment_cell(model_name, dataset_title):
 # ============================================================
 
 N_RUNS = 30
-N_EPOCHS = 200
+N_EPOCHS = 100
 
 all_rmse, all_mse, all_nmse = [], [], []
 all_predictions = []
