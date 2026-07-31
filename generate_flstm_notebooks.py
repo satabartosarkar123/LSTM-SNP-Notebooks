@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-Generator script for FLSTM (Fuzzy Inference-based LSTM) notebooks.
-
-Creates 4 folders (one per dataset) with 9 notebooks each (3 MF types x 3 variants).
-Each notebook implements the Wang-Mendel fuzzy rule base with triangular MFs
-from the FLSTM paper (doi:10.1038/s41598-023-47812-3), integrated with the
-existing MembershipLSTMSNPCell architecture.
-
-Notebooks test at 4 Gaussian noise levels: 0% (no noise), 0.5%, 5%, 10%.
+Generator script for FLSTM (Fuzzy Inference-based LSTM) notebooks with dynamic lag & CUDA acceleration.
+Generates notebooks for all 7 Fuzzy MF datasets (63 notebooks total across 7 folders).
 """
 
 import json
@@ -22,21 +16,43 @@ DATASETS = {
         'csv_path': '../content/monthly-closings-of-the-dowjones.csv',
         'display_name': 'Dow Jones',
         'folder_suffix': 'DowJones',
+        'load_type': 'csv_dow',
     },
     'lake_erie': {
         'csv_path': '../content/monthly-lake-erie-levels-1921-19.csv',
         'display_name': 'Lake Erie',
         'folder_suffix': 'LakeErie',
+        'load_type': 'csv_single',
     },
     'milk_production': {
         'csv_path': '../content/monthly-milk-production-pounds-p.csv',
         'display_name': 'Milk Production',
         'folder_suffix': 'MilkProduction',
+        'load_type': 'csv_single',
     },
     'sp500': {
         'csv_path': '../content/sp500.csv',
         'display_name': 'SP500',
         'folder_suffix': 'SP500',
+        'load_type': 'csv_single',
+    },
+    'sunspots': {
+        'csv_path': '../content/Sunspots.csv',
+        'display_name': 'Sunspots',
+        'folder_suffix': 'Sunspots',
+        'load_type': 'csv_sunspots',
+    },
+    'mackey_glass': {
+        'csv_path': '../content/Mackey-Glass Time Series(taw17).xlsx',
+        'display_name': 'Mackey-Glass',
+        'folder_suffix': 'MackeyGlass',
+        'load_type': 'excel_mackey',
+    },
+    'epl': {
+        'csv_path': '../content/English Premier League Dataset/data',
+        'display_name': 'EPL',
+        'folder_suffix': 'EPL',
+        'load_type': 'epl_dir',
     },
 }
 
@@ -56,6 +72,7 @@ NUM_EPOCHS = 100
 UNITS = 8
 Q_REGIONS = 5
 TEST_SPLIT = 60
+DEFAULT_LAG = 5
 
 
 # ============================================================================
@@ -80,7 +97,7 @@ def make_code_cell(source_text):
 
 def cell_title(variant_display, mf_display, dataset_display):
     return make_markdown_cell(
-        f"# FLSTM {variant_display} using {mf_display}\\nDataset: {dataset_display}"
+        f"# FLSTM {variant_display} using {mf_display}\nDataset: {dataset_display}"
     )
 
 
@@ -105,19 +122,23 @@ def cell_timer_start():
     )
 
 
-def cell_cpu_only():
+def cell_device_setup():
     return make_code_cell(
         "# ============================================================\n"
-        "# CPU ONLY Settings (Forced)\n"
+        "# Device Setup (CUDA GPU Acceleration Enabled)\n"
         "# ============================================================\n"
         "import tensorflow as tf\n"
-        "import platform\n"
         "\n"
-        "try:\n"
-        "    tf.config.set_visible_devices([], 'GPU')\n"
-        "    print('Forcing CPU execution (disabled GPU visibility).')\n"
-        "except RuntimeError as e:\n"
-        "    print(e)\n"
+        "gpus = tf.config.list_physical_devices('GPU')\n"
+        "if gpus:\n"
+        "    try:\n"
+        "        for gpu in gpus:\n"
+        "            tf.config.experimental.set_memory_growth(gpu, True)\n"
+        "        print(f\"CUDA Acceleration Enabled: {len(gpus)} GPU(s) detected.\")\n"
+        "    except RuntimeError as e:\n"
+        "        print(f\"GPU setup error: {e}\")\n"
+        "else:\n"
+        '    print("Running on CPU.")\n'
     )
 
 
@@ -132,14 +153,12 @@ def cell_imports():
         "from sklearn.metrics import mean_squared_error\n"
         "from math import sqrt\n"
         "import matplotlib.pyplot as plt\n"
-        "\n"
-        "\n"
+        "import os as _os\n"
         "\n"
     )
 
 
 def cell_wang_mendel_fuzzy():
-    """Wang-Mendel fuzzy rule base with triangular MFs (NumPy, for preprocessing)."""
     return make_code_cell(
         "# ============================================================\n"
         "# Wang-Mendel Fuzzy Rule Base with Triangular MFs\n"
@@ -195,9 +214,7 @@ def cell_wang_mendel_fuzzy():
         "    return rules\n"
         "\n"
         "def complement_wm_rules(rules, q, n_features, centers_y):\n"
-        '    """Add complement rules for missing antecedent combinations.\n'
-        '    For each missing combination, assign the consequent of the nearest existing rule.\n'
-        '    """\n'
+        '    """Add complement rules for missing antecedent combinations."""\n'
         "    import itertools\n"
         "    all_combos = list(itertools.product(range(q), repeat=n_features))\n"
         "    for combo in all_combos:\n"
@@ -213,11 +230,8 @@ def cell_wang_mendel_fuzzy():
         "    return rules\n"
         "\n"
         "def wm_fuzzy_predict(x_features, rules, fs_x_list, centers_y, q=Q_REGIONS):\n"
-        '    """Predict using fuzzy rule base with center-average defuzzification.\n'
-        '    x_features: 1D array of input features for one sample.\n'
-        '    """\n'
+        '    """Predict using fuzzy rule base with center-average defuzzification."""\n'
         "    n_features = len(x_features)\n"
-        "    # Compute membership degrees for each feature across all q regions\n"
         "    memberships = []\n"
         "    for j in range(n_features):\n"
         "        mf_vals = []\n"
@@ -225,7 +239,6 @@ def cell_wang_mendel_fuzzy():
         "            a, b, c = fs_x_list[j][k]\n"
         "            mf_vals.append(triangular_mf_np(x_features[j], a, b, c))\n"
         "        memberships.append(mf_vals)\n"
-        "    # Weighted average defuzzification over all rules\n"
         "    total_weight = 0.0\n"
         "    weighted_sum = 0.0\n"
         "    for antecedents, (consequent, _) in rules.items():\n"
@@ -237,12 +250,9 @@ def cell_wang_mendel_fuzzy():
         "            total_weight += strength\n"
         "    if total_weight > 1e-10:\n"
         "        return weighted_sum / total_weight\n"
-        "    return 0.0\n"
+        "    return centers_y[q // 2]\n"
         "\n"
         "def build_wm_system(X_train, y_train, q=Q_REGIONS):\n"
-        '    """Build complete Wang-Mendel fuzzy system from training data.\n'
-        '    Returns: (rules, fs_x_list, centers_y)\n'
-        '    """\n'
         "    n_features = X_train.shape[1]\n"
         "    fs_x_list = []\n"
         "    for j in range(n_features):\n"
@@ -255,7 +265,6 @@ def cell_wang_mendel_fuzzy():
         "    return rules, fs_x_list, centers_y\n"
         "\n"
         "def compute_fuzzy_predictions(X, rules, fs_x_list, centers_y, q=Q_REGIONS):\n"
-        '    """Compute Wang-Mendel fuzzy predictions for an array of samples."""\n'
         "    preds = np.zeros(len(X))\n"
         "    for i in range(len(X)):\n"
         "        preds[i] = wm_fuzzy_predict(X[i], rules, fs_x_list, centers_y, q)\n"
@@ -264,7 +273,6 @@ def cell_wang_mendel_fuzzy():
 
 
 def cell_mf_functions_and_flstm_cell(mf_type_code):
-    """MF functions (DOG, SG, GB) + FLSTM Cell with fuzzy prediction fusion + Strengthening Memory."""
     return make_code_cell(
         "# ============================================================\n"
         "# Membership Functions\n"
@@ -280,7 +288,6 @@ def cell_mf_functions_and_flstm_cell(mf_type_code):
         "\n"
         "# ============================================================\n"
         "# FLSTM Cell: MF-based gates + Fuzzy Prediction Fusion\n"
-        "# (r_t is integrated into gate computations via separate weights)\n"
         "# ============================================================\n"
         "@tf.keras.utils.register_keras_serializable()\n"
         "class MembershipFLSTMSNPCell(layers.Layer):\n"
@@ -291,24 +298,19 @@ def cell_mf_functions_and_flstm_cell(mf_type_code):
         "        self.mf = dog if mf_type == 'dog' else signed_gaussian if mf_type == 'sg' else generalized_bell\n"
         "\n"
         "    def build(self, input_shape):\n"
-        "        # input_shape[-1] includes the fuzzy prediction r_t as the LAST feature\n"
         "        total_input_dim = input_shape[-1]\n"
         "        actual_input_dim = total_input_dim - 1  # exclude r_t\n"
         "        self.kernel = self.add_weight(shape=(actual_input_dim, self.units * 4), initializer='glorot_uniform', name='kernel')\n"
         "        self.recurrent_kernel = self.add_weight(shape=(self.units, self.units * 4), initializer='orthogonal', name='recurrent_kernel')\n"
         "        self.bias = self.add_weight(shape=(self.units * 4,), initializer='zeros', name='bias')\n"
-        "        # Fuzzy prediction fusion weights: W_gf, W_gi, W_go (Eq. 14-16)\n"
-        "        # r_t is scalar → separate weight for each of 3 gates (not candidate)\n"
         "        self.fuzzy_gate_kernel = self.add_weight(shape=(1, self.units * 3), initializer='glorot_uniform', name='fuzzy_gate_kernel')\n"
         "\n"
         "    def call(self, inputs, states):\n"
         "        u_tm1 = states[0]\n"
-        "        # Split: actual input features vs fuzzy prediction r_t\n"
         "        x_t = inputs[:, :-1]\n"
-        "        r_t = inputs[:, -1:]  # (batch, 1)\n"
+        "        r_t = inputs[:, -1:]\n"
         "        z = tf.matmul(x_t, self.kernel) + tf.matmul(u_tm1, self.recurrent_kernel) + self.bias\n"
         "        z0, z1, z2, z3 = z[:, :self.units], z[:, self.units:2*self.units], z[:, 2*self.units:3*self.units], z[:, 3*self.units:]\n"
-        "        # Add fuzzy prediction contribution to gates (Eq. 14-16)\n"
         "        fz = tf.matmul(r_t, self.fuzzy_gate_kernel)\n"
         "        z0 = z0 + fz[:, :self.units]\n"
         "        z1 = z1 + fz[:, self.units:2*self.units]\n"
@@ -329,7 +331,7 @@ def cell_mf_functions_and_flstm_cell(mf_type_code):
         "        return config\n"
         "\n"
         "# ============================================================\n"
-        "# Strengthening Memory Layer (Eq. 17-19)\n"
+        "# Strengthening Memory Layer\n"
         "# ============================================================\n"
         "@tf.keras.utils.register_keras_serializable()\n"
         "class StrengtheningMemoryLayer(layers.Layer):\n"
@@ -340,9 +342,9 @@ def cell_mf_functions_and_flstm_cell(mf_type_code):
         "\n"
         "    def call(self, inputs):\n"
         "        h_t, c_t = inputs\n"
-        "        ch_t = h_t + c_t       # Eq. 17\n"
-        "        s_t = self.dense(ch_t)  # Eq. 18 (Conv1d on single vector ≈ Dense)\n"
-        "        h_hat = ch_t + s_t      # Eq. 19\n"
+        "        ch_t = h_t + c_t\n"
+        "        s_t = self.dense(ch_t)\n"
+        "        h_hat = ch_t + s_t\n"
         "        return h_hat\n"
         "\n"
         "    def get_config(self):\n"
@@ -353,7 +355,6 @@ def cell_mf_functions_and_flstm_cell(mf_type_code):
 
 
 def cell_fuzzy_output_layer():
-    """Wang-Mendel-style learnable fuzzy output layer with triangular MFs."""
     return make_code_cell(
         "# ============================================================\n"
         "# WM Fuzzy Output Layer (Triangular MFs, learnable consequents)\n"
@@ -404,39 +405,19 @@ def cell_fuzzy_output_layer():
 
 
 def cell_build_model(variant, mf_type_code):
-    """build_model function — varies by variant."""
-    if variant == 'Gates_Only':
+    if variant in ['Gates_Only', 'Gates_Plus_FuzzyInput'] :
         return make_code_cell(
             "def build_model(input_dim, units, batch_size):\n"
             f"    cell = MembershipFLSTMSNPCell(units, mf_type='{mf_type_code}')\n"
             "    rnn = layers.RNN(cell, return_sequences=False, return_state=True, stateful=True)\n"
             "\n"
-            "    # input_dim already includes r_t as last feature\n"
             "    inputs = tf.keras.Input(batch_shape=(batch_size, 1, input_dim))\n"
             "    x, u_out, c_out, o_out = rnn(inputs)\n"
-            "    # Strengthening Memory Layer\n"
             "    h_strengthened = StrengtheningMemoryLayer(units)([x, u_out])\n"
             "    outputs = layers.Dense(1)(h_strengthened)\n"
             "\n"
             "    model = tf.keras.Model(inputs=inputs, outputs=[outputs, c_out, o_out])\n"
-            "    model.compile(optimizer=tf.keras.optimizers.legacy.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])\n"
-            "    return model\n"
-        )
-    elif variant == 'Gates_Plus_FuzzyInput':
-        return make_code_cell(
-            "def build_model(input_dim, units, batch_size):\n"
-            f"    cell = MembershipFLSTMSNPCell(units, mf_type='{mf_type_code}')\n"
-            "    rnn = layers.RNN(cell, return_sequences=False, return_state=True, stateful=True)\n"
-            "\n"
-            "    # input_dim already includes r_t as last feature\n"
-            "    inputs = tf.keras.Input(batch_shape=(batch_size, 1, input_dim))\n"
-            "    x, u_out, c_out, o_out = rnn(inputs)\n"
-            "    # Strengthening Memory Layer\n"
-            "    h_strengthened = StrengtheningMemoryLayer(units)([x, u_out])\n"
-            "    outputs = layers.Dense(1)(h_strengthened)\n"
-            "\n"
-            "    model = tf.keras.Model(inputs=inputs, outputs=[outputs, c_out, o_out])\n"
-            "    model.compile(optimizer=tf.keras.optimizers.legacy.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])\n"
+            "    model.compile(optimizer=tf.keras.optimizers.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])\n"
             "    return model\n"
         )
     else:  # Gates_Plus_FuzzyOutput
@@ -445,49 +426,77 @@ def cell_build_model(variant, mf_type_code):
             f"    cell = MembershipFLSTMSNPCell(units, mf_type='{mf_type_code}')\n"
             "    rnn = layers.RNN(cell, return_sequences=False, return_state=True, stateful=True)\n"
             "\n"
-            "    # input_dim already includes r_t as last feature\n"
             "    inputs = tf.keras.Input(batch_shape=(batch_size, 1, input_dim))\n"
             "    x, u_out, c_out, o_out = rnn(inputs)\n"
-            "    # Strengthening Memory Layer\n"
             "    h_strengthened = StrengtheningMemoryLayer(units)([x, u_out])\n"
-            "    # WM Fuzzy Output Layer (replaces Dense(1))\n"
             "    outputs = WMFuzzyOutputLayer(units)(h_strengthened)\n"
             "\n"
             "    model = tf.keras.Model(inputs=inputs, outputs=[outputs, c_out, o_out])\n"
-            "    model.compile(optimizer=tf.keras.optimizers.legacy.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])\n"
+            "    model.compile(optimizer=tf.keras.optimizers.Adam(clipnorm=1.0), loss=['mean_squared_error', None, None])\n"
             "    return model\n"
         )
 
 
-def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path, dataset_display):
-    """Main training/evaluation loop with noise levels."""
-    # Determine lag and input_dim based on variant
-    if variant == 'Gates_Plus_FuzzyInput':
-        lag = 2
-        # For FuzzyInput: features are [x_t, wm_predict(x_t, x_{t-1}), r_t]
-        # But wm_predict IS r_t, so input is [x_t, r_t] → input_dim = 2
-        input_dim = 2
-    else:
-        lag = 1
-        # For Gates_Only and FuzzyOutput: features are [x_t, r_t] → input_dim = 2
-        input_dim = 2
+def get_data_loader_code(load_type, csv_path):
+    clean_path = csv_path.replace('../', '')
+    if load_type == 'csv_dow':
+        return (
+            f"file_path = next((p for p in ['{csv_path}', '{clean_path}', '/Users/satabarto/Research/' + '{clean_path}'] if _os.path.exists(p)), '{csv_path}')\n"
+            "series = pd.read_csv(file_path, header=0, parse_dates=[0], index_col=0)\n"
+            "raw_values = series.values.flatten()\n"
+        )
+    elif load_type == 'csv_single':
+        return (
+            f"file_path = next((p for p in ['{csv_path}', '{clean_path}', '/Users/satabarto/Research/' + '{clean_path}'] if _os.path.exists(p)), '{csv_path}')\n"
+            "series = pd.read_csv(file_path)\n"
+            "raw_values = series.values.flatten()\n"
+        )
+    elif load_type == 'csv_sunspots':
+        return (
+            f"file_path = next((p for p in ['{csv_path}', '{clean_path}', '/Users/satabarto/Research/' + '{clean_path}'] if _os.path.exists(p)), '{csv_path}')\n"
+            "series = pd.read_csv(file_path)\n"
+            "raw_values = series['Monthly Mean Total Sunspot Number'].values.flatten()\n"
+        )
+    elif load_type == 'excel_mackey':
+        return (
+            "import openpyxl\n"
+            f"file_path = next((p for p in ['{csv_path}', '{clean_path}', '/Users/satabarto/Research/' + '{clean_path}'] if _os.path.exists(p)), '{csv_path}')\n"
+            "series = pd.read_excel(file_path)\n"
+            "raw_values = series['t+1'].values.flatten()\n"
+        )
+    elif load_type == 'epl_dir':
+        return (
+            "data_dirs = ['../content/English Premier League Dataset/data', 'content/English Premier League Dataset/data', '/Users/satabarto/Research/content/English Premier League Dataset/data', '/kaggle/input/datasets/saurabhshahane/english-premier-league-dataset']\n"
+            "data_dir = next((d for d in data_dirs if _os.path.exists(d)), '../content/English Premier League Dataset/data')\n"
+            "all_dfs = []\n"
+            "for _f in sorted(_os.listdir(data_dir)):\n"
+            "    if _f.endswith('_csv.csv'):\n"
+            "        df = pd.read_csv(_os.path.join(data_dir, _f))\n"
+            "        df['TotalGoals'] = df['FTHG'] + df['FTAG']\n"
+            "        all_dfs.append(df)\n"
+            "combined = pd.concat(all_dfs, ignore_index=True)\n"
+            "raw_values = combined['TotalGoals'].values.astype(float)\n"
+        )
 
-    # Build the data prep + fuzzy preprocessing code
+
+def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path, dataset_display, load_type):
+    data_loader = get_data_loader_code(load_type, csv_path)
+
     data_prep = (
-        f"series = pd.read_csv('{csv_path}', header=0, parse_dates=[0], index_col=0)\n"
-        "raw_values = series.values.flatten()\n"
+        data_loader +
         "import numpy as np\n"
         "original_raw_values = np.copy(raw_values)\n"
         "s_x = np.std(original_raw_values)\n"
         "noise_levels = [0.0, 0.005, 0.05, 0.1]\n"
+        f"LAG_STEPS = {DEFAULT_LAG}  # Dynamic lag parameter\n"
         "\n"
         "for lam in noise_levels:\n"
         "    sigma = lam * s_x\n"
         '    print("\\n" + "="*80)\n'
         '    if lam == 0.0:\n'
-        '        print(f"EVALUATING: NO NOISE (lambda=0)")\n'
+        f'        print(f"EVALUATING: NO NOISE (lambda=0) — Lag Steps: {{LAG_STEPS}}")\n'
         '    else:\n'
-        '        print(f"EVALUATING NOISE LEVEL: {lam*100:.1f}% (lambda={lam}, sigma={sigma:.6f})")\n'
+        f'        print(f"EVALUATING NOISE LEVEL: {{lam*100:.1f}}% (lambda={{lam}}, sigma={{sigma:.6f}}) — Lag Steps: {{LAG_STEPS}}")\n'
         '    print("="*80 + "\\n")\n'
         "    \n"
         "    np.random.seed(42)\n"
@@ -498,12 +507,10 @@ def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path,
         "    else:\n"
         "        raw_values = np.copy(original_raw_values)\n"
         "    \n"
-        "    \n"
         "    def difference(dataset, interval=1):\n"
         "        diff = []\n"
         "        for i in range(interval, len(dataset)):\n"
-        "            value = dataset[i] - dataset[i - interval]\n"
-        "            diff.append(value)\n"
+        "            diff.append(dataset[i] - dataset[i - interval])\n"
         "        return np.array(diff)\n"
         "    \n"
         "    diff_values = difference(raw_values, 1)\n"
@@ -515,9 +522,7 @@ def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path,
         "        df.fillna(0, inplace=True)\n"
         "        return df.values\n"
         "    \n"
-        "    \n"
-        "    \n"
-        f"    supervised = timeseries_to_supervised(diff_values, {lag})\n"
+        "    supervised = timeseries_to_supervised(diff_values, LAG_STEPS)\n"
         f"    train, test = supervised[:-{TEST_SPLIT}], supervised[-{TEST_SPLIT}:]\n"
         "    scaler = MinMaxScaler(feature_range=(-1, 1))\n"
         "    train_scaled = scaler.fit_transform(train)\n"
@@ -528,46 +533,24 @@ def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path,
         "    \n"
     )
 
-    # Add WM fuzzy preprocessing depending on variant
-    if variant == 'Gates_Plus_FuzzyInput':
-        fuzzy_prep = (
-            "    # Build WM fuzzy system from training data\n"
-            "    wm_rules, wm_fs_x, wm_centers_y = build_wm_system(X_train_raw, y_train)\n"
-            "    \n"
-            "    # Compute WM fuzzy predictions as r_t (replaces TSK fuzzy_inference)\n"
-            "    r_train = compute_fuzzy_predictions(X_train_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
-            "    r_test = compute_fuzzy_predictions(X_test_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
-            "    \n"
-            "    # Input: [x_t, r_t] where x_t is the most recent lag feature\n"
-            "    X_train_fuzzy = np.zeros((X_train_raw.shape[0], 2))\n"
-            "    X_test_fuzzy = np.zeros((X_test_raw.shape[0], 2))\n"
-            f"    for i in range(X_train_raw.shape[0]): X_train_fuzzy[i] = [X_train_raw[i, {lag - 1}], r_train[i]]\n"
-            f"    for i in range(X_test_raw.shape[0]): X_test_fuzzy[i] = [X_test_raw[i, {lag - 1}], r_test[i]]\n"
-            "    \n"
-            "    X_train = X_train_fuzzy.reshape((X_train_fuzzy.shape[0], 1, X_train_fuzzy.shape[1]))\n"
-            "    X_test = X_test_fuzzy.reshape((X_test_fuzzy.shape[0], 1, X_test_fuzzy.shape[1]))\n"
-            "    \n"
-        )
-    else:
-        # Gates_Only and FuzzyOutput: input is [x_t, r_t]
-        fuzzy_prep = (
-            "    # Build WM fuzzy system from training data\n"
-            "    wm_rules, wm_fs_x, wm_centers_y = build_wm_system(X_train_raw, y_train)\n"
-            "    \n"
-            "    # Compute WM fuzzy predictions r_t for gate fusion\n"
-            "    r_train = compute_fuzzy_predictions(X_train_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
-            "    r_test = compute_fuzzy_predictions(X_test_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
-            "    \n"
-            "    # Concatenate r_t as last feature: [x_t, r_t]\n"
-            "    X_train_aug = np.column_stack([X_train_raw, r_train])\n"
-            "    X_test_aug = np.column_stack([X_test_raw, r_test])\n"
-            "    \n"
-            "    X_train = X_train_aug.reshape((X_train_aug.shape[0], 1, X_train_aug.shape[1]))\n"
-            "    X_test = X_test_aug.reshape((X_test_aug.shape[0], 1, X_test_aug.shape[1]))\n"
-            "    \n"
-        )
+    fuzzy_prep = (
+        "    # Build WM fuzzy system from training data\n"
+        "    wm_rules, wm_fs_x, wm_centers_y = build_wm_system(X_train_raw, y_train)\n"
+        "    \n"
+        "    # Compute WM fuzzy predictions r_t for gate fusion\n"
+        "    r_train = compute_fuzzy_predictions(X_train_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
+        "    r_test = compute_fuzzy_predictions(X_test_raw, wm_rules, wm_fs_x, wm_centers_y)\n"
+        "    \n"
+        "    # Concatenate r_t as last feature: [x_t, r_t]\n"
+        "    X_train_aug = np.column_stack([X_train_raw, r_train])\n"
+        "    X_test_aug = np.column_stack([X_test_raw, r_test])\n"
+        "    num_features = X_train_aug.shape[1]\n"
+        "    \n"
+        "    X_train = X_train_aug.reshape((X_train_aug.shape[0], 1, num_features))\n"
+        "    X_test = X_test_aug.reshape((X_test_aug.shape[0], 1, num_features))\n"
+        "    \n"
+    )
 
-    # Training & evaluation loop
     train_eval = (
         "    all_rmse, all_mse, all_nmse = [], [], []\n"
         "    all_predictions = []\n"
@@ -581,7 +564,7 @@ def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path,
         "        tf.random.set_seed(run)\n"
         "        tf.keras.backend.clear_session()\n"
         "        \n"
-        f"        model = build_model(input_dim={input_dim}, units={UNITS}, batch_size=1)\n"
+        f"        model = build_model(input_dim=num_features, units={UNITS}, batch_size=1)\n"
         "        rnn_layer = model.layers[1]\n"
         "        \n"
         "        run_losses = []\n"
@@ -599,176 +582,35 @@ def cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path,
         "            yhat, c_val, o_val = model.predict(X_test[i:i+1], batch_size=1, verbose=0)\n"
         "            c_gates.append(c_val[0])\n"
         "            o_gates.append(o_val[0])\n"
-        "            \n"
-        "            row = list(X_test_raw[i]) + [yhat[0, 0]]\n"
-        f"            inv = scaler.inverse_transform([row])[0, -1] + raw_values[len(train) + i]\n"
+        "            pred_val = yhat[0, 0] if hasattr(yhat, 'shape') else yhat\n"
+        "            row = list(X_test_raw[i]) + [pred_val]\n"
+        "            diff_pred = scaler.inverse_transform([row])[0, -1]\n"
+        "            inv = diff_pred + raw_values[len(train) + i]\n"
         "            predictions.append(inv)\n"
-        "            \n"
+        "    \n"
         "        c_gates, o_gates = np.array(c_gates), np.array(o_gates)\n"
         "        all_c_means.append(np.mean(c_gates)); all_c_stds.append(np.std(c_gates))\n"
         "        all_c_mins.append(np.min(c_gates)); all_c_maxs.append(np.max(c_gates))\n"
         "        all_o_means.append(np.mean(o_gates)); all_o_stds.append(np.std(o_gates))\n"
         "        all_o_mins.append(np.min(o_gates)); all_o_maxs.append(np.max(o_gates))\n"
-        "    \n"
+        "        \n"
         f"        actual = raw_values[-{TEST_SPLIT}:]\n"
         "        rmse = sqrt(mean_squared_error(actual, predictions))\n"
         "        mse = mean_squared_error(actual, predictions)\n"
-        "        meanV = np.mean(actual)\n"
-        "        dominator = np.linalg.norm(np.array(predictions) - meanV, 2)\n"
-        "        nmse = mse / np.power(dominator, 2)\n"
-        "    \n"
+        "        nmse = mse / (np.var(actual) + 1e-10)\n"
+        "        \n"
         "        all_rmse.append(rmse)\n"
         "        all_mse.append(mse)\n"
         "        all_nmse.append(nmse)\n"
         "        all_predictions.append(predictions)\n"
-        "        print(f'Run {run+1} — RMSE: {rmse:.6f}, MSE: {mse:.6f}, NMSE: {nmse:.10f} (Gate Mean C: {np.mean(c_gates):.4f})')\n"
-        "    \n"
-        "    print('\\n===== GATE STATISTICS =====')\n"
-        "    print(f'C-Gate - Mean: {np.mean(all_c_means):.4f}, Min: {np.min(all_c_mins):.4f}, Max: {np.max(all_c_maxs):.4f}')\n"
-        "    print(f'O-Gate - Mean: {np.mean(all_o_means):.4f}, Min: {np.min(all_o_mins):.4f}, Max: {np.max(all_o_maxs):.4f}')\n"
-        "    print(f'\\nOverall RMSE: {np.mean(all_rmse):.6f}')\n"
-        "    \n"
-        "    \n"
-        f"    # Summary Statistics ({NUM_RUNS} runs)\n"
-        "    \n"
-        f"    print('\\n===== FINAL RESULTS — FLSTM {variant_display} ({mf_display}) on {dataset_display} ({NUM_RUNS} runs) =====')\n"
-        "    mean_rmse = np.mean(all_rmse)\n"
-        "    std_rmse = np.std(all_rmse)\n"
-        "    var_rmse = np.var(all_rmse)\n"
-        "    \n"
-        "    mean_mse = np.mean(all_mse)\n"
-        "    std_mse = np.std(all_mse)\n"
-        "    \n"
-        "    mean_nmse = np.mean(all_nmse)\n"
-        "    std_nmse = np.std(all_nmse)\n"
-        "    \n"
-        "    print(f'RMSE: {mean_rmse:.6f} ± {std_rmse:.6f} (Var: {var_rmse:.6f})')\n"
-        "    print(f'MSE:  {mean_mse:.6f} ± {std_mse:.6f}')\n"
-        "    print(f'NMSE: {mean_nmse:.10f} ± {std_nmse:.10f}')\n"
-        "    \n"
+        "        \n"
+        "        print(f'Run {run+1} — RMSE: {rmse:.6f}, MAE: {np.mean(np.abs(np.array(actual) - np.array(predictions))):.6f}')\n"
+        "        \n"
         "    best_idx = np.argmin(all_rmse)\n"
-        "    \n"
-        "    print(f'\\nBest run: {best_idx+1}')\n"
-        "    print(f'  RMSE: {all_rmse[best_idx]:.6f}')\n"
-        "    print(f'  MSE:  {all_mse[best_idx]:.6f}')\n"
-        "    print(f'  NMSE: {all_nmse[best_idx]:.10f}')\n"
-        "    \n"
-        "    # Predictions vs Actual (Best Run)\n"
-        "    \n"
-        f"    actual = raw_values[-{TEST_SPLIT}:]\n"
-        "    best_predictions = all_predictions[best_idx]\n"
-        "    \n"
-        "    plt.figure(figsize=(12, 5))\n"
-        "    plt.plot(actual, label='Actual', color='blue', linewidth=1.5)\n"
-        "    plt.plot(best_predictions, label='Predicted (Best Run)', color='red',\n"
-        "             linewidth=1.5, linestyle='--')\n"
-        f"    plt.title('FLSTM {variant_display} ({mf_display}) — {dataset_display}\\nPredictions vs Actual (Best of {NUM_RUNS} runs)')\n"
-        "    plt.xlabel('Time Step')\n"
-        "    plt.ylabel('Value')\n"
-        "    plt.legend()\n"
-        "    plt.grid(True, alpha=0.3)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        "    # Loss Curve (Best Run)\n"
-        "    \n"
-        "    plt.figure(figsize=(12, 4))\n"
-        "    plt.plot(all_losses[best_idx], color='green', linewidth=1.0)\n"
-        f"    plt.title('FLSTM {variant_display} ({mf_display}) — {dataset_display}\\nTraining Loss (Best Run)')\n"
-        "    plt.xlabel('Epoch')\n"
-        "    plt.ylabel('MSE Loss')\n"
-        "    plt.grid(True, alpha=0.3)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        f"    # Average Loss Curve (All {NUM_RUNS} Runs)\n"
-        "    \n"
-        "    avg_losses = np.mean(all_losses, axis=0)\n"
-        "    std_losses = np.std(all_losses, axis=0)\n"
-        "    epochs = np.arange(1, len(avg_losses) + 1)\n"
-        "    \n"
-        "    plt.figure(figsize=(12, 4))\n"
-        "    plt.plot(epochs, avg_losses, color='purple', linewidth=1.5, label='Mean Loss')\n"
-        "    plt.fill_between(epochs, avg_losses - std_losses, avg_losses + std_losses,\n"
-        "                     alpha=0.2, color='purple', label='±1 Std Dev')\n"
-        f"    plt.title('FLSTM {variant_display} ({mf_display}) — {dataset_display}\\nAverage Training Loss ({NUM_RUNS} runs ± 1σ)')\n"
-        "    plt.xlabel('Epoch')\n"
-        "    plt.ylabel('MSE Loss')\n"
-        "    plt.legend()\n"
-        "    plt.grid(True, alpha=0.3)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        "    # RMSE Distribution (Boxplot + All Points)\n"
-        "    \n"
-        "    plt.figure(figsize=(8, 5))\n"
-        "    plt.boxplot(all_rmse, vert=True, patch_artist=True,\n"
-        "                boxprops=dict(facecolor='lightblue', color='navy'),\n"
-        "                medianprops=dict(color='red', linewidth=2))\n"
-        "    plt.scatter(np.ones(len(all_rmse)), all_rmse, alpha=0.5, color='navy', zorder=5)\n"
-        f"    plt.title('FLSTM {variant_display} ({mf_display}) — {dataset_display}\\nRMSE Distribution ({NUM_RUNS} runs)')\n"
-        "    plt.ylabel('RMSE')\n"
-        "    plt.grid(True, alpha=0.3)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        "    # Average Predictions vs Actual\n"
-        "    \n"
-        "    avg_predictions = np.mean(all_predictions, axis=0)\n"
-        "    std_predictions = np.std(all_predictions, axis=0)\n"
-        "    \n"
-        "    plt.figure(figsize=(12, 5))\n"
-        "    plt.plot(actual, label='Actual', color='blue', linewidth=1.5)\n"
-        f"    plt.plot(avg_predictions, label='Mean Predicted ({NUM_RUNS} runs)', color='red',\n"
-        "             linewidth=1.5, linestyle='--')\n"
-        "    plt.fill_between(range(len(actual)),\n"
-        "                     avg_predictions - std_predictions,\n"
-        "                     avg_predictions + std_predictions,\n"
-        "                     alpha=0.2, color='red', label='±1 Std Dev')\n"
-        f"    plt.title('FLSTM {variant_display} ({mf_display}) — {dataset_display}\\nAverage Predictions vs Actual ({NUM_RUNS} runs ± 1σ)')\n"
-        "    plt.xlabel('Time Step')\n"
-        "    plt.ylabel('Value')\n"
-        "    plt.legend()\n"
-        "    plt.grid(True, alpha=0.3)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        "    # Gate Statistics Visualization\n"
-        "    \n"
-        "    fig, axes = plt.subplots(1, 2, figsize=(14, 5))\n"
-        "    \n"
-        "    # C-Gate statistics\n"
-        "    axes[0].errorbar(range(len(all_c_means)), all_c_means, yerr=all_c_stds,\n"
-        "                     fmt='o-', color='teal', ecolor='lightcoral', capsize=3, markersize=4)\n"
-        "    axes[0].set_title('C-Gate Mean ± Std per Run')\n"
-        "    axes[0].set_xlabel('Run')\n"
-        "    axes[0].set_ylabel('C-Gate Value')\n"
-        "    axes[0].grid(True, alpha=0.3)\n"
-        "    \n"
-        "    # O-Gate statistics\n"
-        "    axes[1].errorbar(range(len(all_o_means)), all_o_means, yerr=all_o_stds,\n"
-        "                     fmt='o-', color='darkorange', ecolor='lightcoral', capsize=3, markersize=4)\n"
-        "    axes[1].set_title('O-Gate Mean ± Std per Run')\n"
-        "    axes[1].set_xlabel('Run')\n"
-        "    axes[1].set_ylabel('O-Gate Value')\n"
-        "    axes[1].grid(True, alpha=0.3)\n"
-        "    \n"
-        f"    plt.suptitle('FLSTM {variant_display} ({mf_display}) — {dataset_display} — Gate Statistics ({NUM_RUNS} runs)', fontsize=13)\n"
-        "    plt.tight_layout()\n"
-        "    plt.show()\n"
-        "    \n"
-        "    # Final Metrics Summary\n"
-        "    \n"
-        "    print('=== Best Run Metrics ===')\n"
-        "    print(f'RMSE: {all_rmse[best_idx]:.6f}')\n"
-        "    print(f'MSE:  {all_mse[best_idx]:.6f}')\n"
-        "    print(f'NMSE: {all_nmse[best_idx]:.10f}')\n"
-        "    \n"
-        f"    print('\\n=== Average Metrics ({NUM_RUNS} runs) ===')\n"
+        "    print(f'\\n===== FINAL RESULTS — FLSTM {variant_display} ({mf_display}) on {dataset_display} ({NUM_RUNS} runs, Lag={DEFAULT_LAG}) =====')\n"
         "    print(f'RMSE: {np.mean(all_rmse):.6f} ± {np.std(all_rmse):.6f}')\n"
         "    print(f'MSE:  {np.mean(all_mse):.6f} ± {np.std(all_mse):.6f}')\n"
         "    print(f'NMSE: {np.mean(all_nmse):.10f} ± {np.std(all_nmse):.10f}')\n"
-        "    "
     )
 
     return make_code_cell(data_prep + fuzzy_prep + train_eval)
@@ -780,12 +622,9 @@ def cell_results():
 
 def cell_observations(variant_display, mf_display, dataset_display):
     return make_markdown_cell(
-        f"## Observations\n"
-        f"\n"
-        f"### FLSTM {variant_display} ({mf_display}) on {dataset_display}\n"
-        f"\n"
-        f"**Run the notebook to generate results and fill in observations:**\n"
-        f"\n"
+        f"## Observations\n\n"
+        f"### FLSTM {variant_display} ({mf_display}) on {dataset_display}\n\n"
+        f"**Run the notebook to generate results and fill in observations:**\n\n"
         f"1. **Prediction Quality**: Compare RMSE/MSE/NMSE with other variants\n"
         f"2. **Training Stability**: Examine loss curves for convergence behavior\n"
         f"3. **Average Behaviour**: Compare average predictions vs actual\n"
@@ -794,9 +633,6 @@ def cell_observations(variant_display, mf_display, dataset_display):
         f"6. **Computational Cost**: Note training time per run\n"
         f"7. **Noise Robustness**: Compare metrics across noise levels (0%, 0.5%, 5%, 10%)\n"
         f"8. **FLSTM Components**: Evaluate the impact of fuzzy prediction fusion and strengthening memory\n"
-        f"\n"
-        f"*After running all variant notebooks, perform cross-variant comparison to evaluate \n"
-        f"whether the FLSTM interfacing improves performance over TSK interfacing.*\n"
     )
 
 
@@ -815,74 +651,41 @@ def cell_timer_end():
     )
 
 
-# ============================================================================
-# Notebook builder
-# ============================================================================
-
 def build_notebook(variant, mf_display, mf_type_code, dataset_key, dataset_config):
-    """Build a complete notebook as a dict."""
     variant_display = variant.replace('_', ' ').replace('Plus', '+')
     dataset_display = dataset_config['display_name']
     csv_path = dataset_config['csv_path']
+    load_type = dataset_config['load_type']
 
     cells = []
-
-    # 1. Title
     cells.append(cell_title(variant_display, mf_display, dataset_display))
-
-    # 2. PID
     cells.append(cell_pid())
-
-    # 3. Timer start
     cells.append(cell_timer_start())
-
-    # 4. CPU only
-    cells.append(cell_cpu_only())
-
-    # 5. Imports
+    cells.append(cell_device_setup())
     cells.append(cell_imports())
-
-    # 6. Wang-Mendel fuzzy rule base
     cells.append(cell_wang_mendel_fuzzy())
-
-    # 7. MF functions + FLSTM Cell + Strengthening Memory
     cells.append(cell_mf_functions_and_flstm_cell(mf_type_code))
 
-    # 8. FuzzyOutput layer (only for FuzzyOutput variant)
     if variant == 'Gates_Plus_FuzzyOutput':
         cells.append(cell_fuzzy_output_layer())
 
-    # 9. build_model
     cells.append(cell_build_model(variant, mf_type_code))
-
-    # 10. Main training/evaluation loop
-    cells.append(cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path, dataset_display))
-
-    # 11. Results markdown
+    cells.append(cell_main_loop(variant, variant_display, mf_display, mf_type_code, csv_path, dataset_display, load_type))
     cells.append(cell_results())
-
-    # 12. Observations markdown
     cells.append(cell_observations(variant_display, mf_display, dataset_display))
-
-    # 13. Timer end
     cells.append(cell_timer_end())
 
     notebook = {
         "cells": cells,
         "metadata": {
             "kernelspec": {
-                "display_name": "SNN Transformer",
+                "display_name": "Python 3",
                 "language": "python",
-                "name": "snn_transformer",
+                "name": "python3",
             },
             "language_info": {
-                "codemirror_mode": {"name": "ipython", "version": 3},
-                "file_extension": ".py",
-                "mimetype": "text/x-python",
                 "name": "python",
-                "nbconvert_exporter": "python",
-                "pygments_lexer": "ipython3",
-                "version": "3.11.14",
+                "version": "3.12.0",
             },
         },
         "nbformat": 4,
@@ -891,10 +694,6 @@ def build_notebook(variant, mf_display, mf_type_code, dataset_key, dataset_confi
 
     return notebook
 
-
-# ============================================================================
-# Main
-# ============================================================================
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -916,7 +715,7 @@ def main():
                     json.dump(nb, f, indent=1)
 
                 total_count += 1
-                print(f"  [{total_count:2d}/36] Created: {folder_name}/{filename}")
+                print(f"  [{total_count:2d}/63] Created: {folder_name}/{filename}")
 
     print(f"\nDone! Generated {total_count} notebooks across {len(DATASETS)} folders.")
 
